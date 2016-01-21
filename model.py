@@ -68,8 +68,10 @@ class node_grid:
             self.neventsqueued -= expectedfinished
             return datapacket( expectedfinished, self.recosize_mb )
         else:
-            self.neventsqueued -= self.neventsqueued
-            return datapacket( self.neventsqueued, self.recosize_mb )
+            # clear out!
+            send = self.neventsqueued
+            self.neventsqueued = 0
+            return datapacket( send, self.recosize_mb )
     def queueevents( self, packet ):
         self.neventsqueued += packet.events
     def workers_available( self ):
