@@ -157,7 +157,7 @@ if __name__ == "__main__":
 
         # use remaining enstore-to-tape bandwidth to pull (raw) events from tape
 
-        nevents_raw_leftover = int( (TAPE_BANDWIDTH*time_step_sec-reco_bandwidth_used)/recosize_mb )
+        nevents_raw_leftover = int( (TAPE_BANDWIDTH*time_step_sec-reco_bandwidth_used)/raw_mb_per_event )
         if nevents_raw_leftover<0 or enstore.isfull():
             # if enstore is full or we are out of band width, do not get raw events from tape
             nevents_raw_leftover = 0
@@ -180,12 +180,14 @@ if __name__ == "__main__":
             print " ",time_step_sec*reco_rate_hz_perevent*NWORKERS
             print " [ENSTORE] raw=",enstore.raw_size_mb," (",enstore.raw_nevents,") reco=",enstore.reco_size_mb," (",enstore.reco_nevents,")",
             print "  %.2f"%( 100.0*(enstore.raw_size_mb+enstore.reco_size_mb)/enstore.maxpoolsize_mb )
-            print " [PERSISTENT] ",persistent.reco_nevents," events (%.2f%% full)"%(100.0*(persistent.reco_size_mb/persistent.maxsize_mb))
+            print " [PERSISTENT] processed ",persistent.reco_nevents," events",
+            print " (%.2f%% full)"%(100.0*(persistent.reco_size_mb/persistent.maxsize_mb))
             print " [TAPE] event backlog=",tape.event_backlog," processed=",tape.event_processed
-            print " [SEND ]",packet_reco_fromenstore_totape.events," overflow reco from enstore to tape (",
-            print " (%.2f%%)"%(100.0*reco_bandwidth_used/(TAPE_BANDWIDTH*time_step_sec))
-            print " [SEND] ",packet_raw_fromtape.events," raw events from tape to enstore"
-            print " [SEND] ",navailable," raw events from enstore to grid"
+            print " [SEND]",packet_reco_fromenstore_totape.events," overflow reco from enstore to tape ",
+            print " (%.2f%% of enstore-tape bandwidth)"%(100.0*reco_bandwidth_used/(TAPE_BANDWIDTH*time_step_sec))
+            print " [SEND] ",packet_raw_fromtape.events," raw events from tape to enstore",
+            print " (%.2f%% of tape-enstore bandwidth)"%(100.0*packet_raw_fromtape.size_mb/(TAPE_BANDWIDTH*time_step_sec))
+            print " [GRID] ",navailable," raw events from enstore to grid"
             print " [GRID] workers available=",grid.workers_available()," events queued=",grid.neventsqueued
             if enstore.isfull():
                 print "  [ENSTORE FULL]"
