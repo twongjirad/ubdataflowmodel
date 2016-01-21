@@ -95,6 +95,16 @@ class node_tape:
     def receive_reco(self,packet):
         self.event_processed += packet.events
 
+class node_persistent:
+    def __init__(self,maxpersistent_mb):
+        self.maxsize_mb = maxpersistent_mb
+        self.reco_nevents = 0
+        self.reco_size_mb = 0
+    def receive_grid( self, packet ):
+        self.reco_nevents += packet.events
+        self.reco_size_mb += packet.size_mb
+
+
 if __name__ == "__main__":
 
     DAYS_OF_BACKLOG = 120
@@ -106,14 +116,16 @@ if __name__ == "__main__":
     TAPE_BANDWIDTH = 450 # mb/s
     reco_rate_hz_perevent = 1.0/800.0 # sec
     event_backlog = 5.0*(3600)*24*(DAYS_OF_BACKLOG)
-    maxpool_mb = 50*1e6 # TB to mb
+    maxpool_mb = 100*1e6 # TB to mb
+    maxpersistent_mb = 70*1e6 # TB
+    use_persistent = True
 
     # setup components
     daq = node_daq( daqrate_hz, raw_mb_per_event )
     grid = node_grid( NWORKERS, reco_rate_hz_perevent, recosize_mb )
     tape = node_tape( event_backlog, raw_mb_per_event )
     enstore = node_enstore( maxpool_mb, recosize_mb, raw_mb_per_event )
-
+    persistent = node_persistent( maxpersistent_mb )
 
     tottime = 0.0
     last_report = 0.0
@@ -121,35 +133,40 @@ if __name__ == "__main__":
     while True:
         tottime += time_step_sec
         nsteps += 1
-        # step 1, gen packets from daq and grid
 
         # DAQ outputs raw binary events
         packet_raw_from_daq = daq.gendata(time_step_sec)
-        # grid processes from files
+        # grid processes from events in queue
         packet_reco_from_grid = grid.processdata( time_step_sec )
 
-        # step 2, enstore transactions from daq and grid
-        # receive daq packets (raw)
+        # enstore transactions from daq and grid
+        # - receive daq packets (raw)
         enstore.receive_daq( packet_raw_from_daq )
-        # receive grid packets (reco)
-        enstore.receive_grid( packet_reco_from_grid )
+        
+        # if we dont use persistent to store reco, enstore keeps reco and pushes to tape when necessary
+        # if we use persistent, reco data from grid goes there
+        if not use_persistent:
+            enstore.receive_grid( packet_reco_from_grid )
+            max_reco_events = int( (TAPE_BANDWIDTH*time_step_sec)/recosize_mb )
+            packet_reco_fromenstore_totape = enstore.getreco_for_tape(max_reco_events)
+            reco_bandwidth_used = packet_reco_fromenstore_totape.size_mb
+        else:
+            packet_reco_fromenstore_totape = datapacket(0) # Null packet
+            persistent.receive_grid( packet_reco_from_grid )
+            reco_bandwidth_used = 0
 
-        # step 3 optional enstore transactions
-        # enstore pushes reco to tape if needed
-        max_reco_events = int( (TAPE_BANDWIDTH*time_step_sec)/recosize_mb )
-        packet_reco_fromenstore_totape = enstore.getreco_for_tape(max_reco_events)
+        # use remaining enstore-to-tape bandwidth to pull (raw) events from tape
 
-        # d) use remaining bandwidth to pull (raw) events from tape
-        reco_bandwidth_used = packet_reco_fromenstore_totape.size_mb
         nevents_raw_leftover = int( (TAPE_BANDWIDTH*time_step_sec-reco_bandwidth_used)/recosize_mb )
         if nevents_raw_leftover<0 or enstore.isfull():
+            # if enstore is full or we are out of band width, do not get raw events from tape
             nevents_raw_leftover = 0
         packet_raw_fromtape = tape.getbacklog( nevents_raw_leftover )
         enstore.receive_daq( packet_raw_fromtape ) # same as daq it's raw
-        # e) enstore sends reco events to tape
         if packet_reco_fromenstore_totape.events>0:
             tape.receive_reco( packet_reco_fromenstore_totape )
-        # f) enstore sends raw events to grid
+
+        # enstore sends as many raw events to grid
         navailable = grid.workers_available()
         if navailable>0:
             packet_raw_fromenstore_togrid = enstore.getraw_for_grid(navailable)
@@ -163,6 +180,7 @@ if __name__ == "__main__":
             print " ",time_step_sec*reco_rate_hz_perevent*NWORKERS
             print " [ENSTORE] raw=",enstore.raw_size_mb," (",enstore.raw_nevents,") reco=",enstore.reco_size_mb," (",enstore.reco_nevents,")",
             print "  %.2f"%( 100.0*(enstore.raw_size_mb+enstore.reco_size_mb)/enstore.maxpoolsize_mb )
+            print " [PERSISTENT] ",persistent.reco_nevents," events (%.2f%% full)"%(100.0*(persistent.reco_size_mb/persistent.maxsize_mb))
             print " [TAPE] event backlog=",tape.event_backlog," processed=",tape.event_processed
             print " [SEND ]",packet_reco_fromenstore_totape.events," overflow reco from enstore to tape (",
             print " (%.2f%%)"%(100.0*reco_bandwidth_used/(TAPE_BANDWIDTH*time_step_sec))
@@ -170,9 +188,10 @@ if __name__ == "__main__":
             print " [SEND] ",navailable," raw events from enstore to grid"
             print " [GRID] workers available=",grid.workers_available()," events queued=",grid.neventsqueued
             if enstore.isfull():
-                print "!! [ENSTORE FULL] !!"
+                print "  [ENSTORE FULL]"
             last_report = tottime
 
+        # total time running in days
         if tottime/(3600.0*24.0)>120:
             break
         #if nsteps>=100:
